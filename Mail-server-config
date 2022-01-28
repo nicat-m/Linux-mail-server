@@ -1,0 +1,157 @@
+1.	Install 
+yum install postfix dovecot mariadb-server postfix-mysql dovecot-mysql –y
+2.	Start and enable mariadb
+	systemctl enable --now  mariadb
+3.	Mysql securey installition
+mysql_secure_installation
+Answer Y at the following prompts:
+•	Remove anonymous users?
+•	Disallow root login remotely?
+•	Remove test database and access to it?
+•	Reload privilege tables now?
+4.	Create mysql databse “mailserver” 
+ 	mysqladmin -u root -p create mailserver
+5.	Log in to mysql 
+mysql -u root –p
+6.	Add user and give him pri
+GRANT SELECT ON mailserver.* TO 'mailuser'@'127.0.0.1' IDENTIFIED BY '12345';
+7.	 Use database 
+USE mailserver;
+8.	Create a table for the domains that will receive mail
+CREATE TABLE `virtual_domains` ( `id` int(11) NOT NULL auto_increment, `name` varchar(50) NOT NULL, PRIMARY KEY (`id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+9.	Create a table for all of the email addresses and passwords:
+
+CREATE TABLE `virtual_users` ( `id` int(11) NOT NULL auto_increment, `domain_id` int(11) NOT NULL, `password` varchar(106) NOT NULL, `email` varchar(100) NOT NULL, PRIMARY KEY (`id`), UNIQUE KEY `email` (`email`), FOREIGN KEY (domain_id) REFERENCES virtual_domains(id) ON DELETE CASCADE ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+10.	Create a table for the email aliases
+
+CREATE TABLE `virtual_aliases` ( `id` int(11) NOT NULL auto_increment, `domain_id` int(11) NOT NULL, `source` varchar(100) NOT NULL, `destination` varchar(100) NOT NULL, PRIMARY KEY (`id`), FOREIGN KEY (domain_id) REFERENCES virtual_domains(id) ON DELETE CASCADE ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+INSERT INTO ‘mailserver’.’virtual_domains’(‘id’ ,’name’) VALUES  (‘1’, ‘ingress.az');
+11.	Add the domains to the virtual_domains table: 
+    INSERT INTO mailserver.virtual_domains (name) VALUES ('example.com');
+12.	   
+   
+INSERT INTO `mailserver`.`virtual_users` (`id`, `domain_id`, `password` , `email`) VALUES ('1', '1', ENCRYPT('firstpassword', CONCAT('$6$', SUBSTRING(SHA(RAND()), -16))), 'email1@rufat.az'), ('2', '1', ENCRYPT('secondpassword', CONCAT('$6$', SUBSTRING(SHA(RAND()), -16))), 'email2@rufat.az');
+
+13.	An email alias will forward all email from one email address to another. To set up an email alias, add it to the virtual_aliases table: 
+    INSERT INTO `mailserver`.`virtual_aliases`
+  (`id`, `domain_id`, `source`, `destination`)
+VALUES
+  ('1', '1', 'students@rufat.az', 'email1@rufat.az');
+
+    SELECT * FROM mailserver.virtual_domains;
+    SELECT * FROM mailserver.virtual_aliases;
+    SELECT * FROM mailserver.virtual_users;
+POSTFIX CONFIGURATION
+1.	cp main.cf main.cf.org
+
+             copy content main.cf  and change domain name and hostname
+2.	vim /etc/postfix/mysql-virtual-mailbox-domains.cf
+user = mailuser 
+password = 12345
+hosts = 127.0.0.1 
+dbname = mailserver 
+query = SELECT 1 FROM virtual_domains WHERE name='%s'
+3.	vim /etc/postfix/mysql-virtual-mailbox-maps.cf
+ user = mailuser
+password = 12345 
+hosts = 127.0.0.1 
+dbname = mailserver 
+query = SELECT 1 FROM virtual_users WHERE email='%s'
+4.	vim /etc/postfix/mysql-virtual-alias-maps.cf
+ user = mailuser
+password = 12345
+hosts = 127.0.0.1
+dbname = mailserver
+query = SELECT destination FROM virtual_aliases WHERE source='%s'
+5.	vim  /etc/postfix/mysql-virtual-email2email.cf 
+ user = mailuser
+password = 12345
+hosts = 127.0.0.1
+dbname = mailserver
+query = SELECT email FROM virtual_users WHERE email='%s'
+6.	restart postfix 
+  systemctl restart postfix
+7.	Enter the following command to ensure that Postfix can query the virtual_domains table. Replace example.com with the first name value. The command should return 1 if it is successful:
+  postmap -q rtps.local  mysql:/etc/postfix/mysql-virtual-mailbox-domains.cf 
+
+8.	Test Postfix to verify that it can retrieve the first email address from the MySQL table virtual_users. Replace email1@example.com with the first email address added to the table. You should receive 1 as the output:
+
+postmap -q email1@rufat.com  mysql:/etc/postfix/mysql-virtual-mailbox-maps.cf
+9.	Test Postfix to verify that it can query the virtual_aliases table. Replace alias@example.com with the first source value created in the table. The command should return the destination value for the row:
+postmap -q students@rufat.coml mysql:/etc/postfix/mysql-virtual-alias-maps.cf
+10.	 sudo cp /etc/postfix/master.cf /etc/postfix/master.cf.orig
+11.	 Change the permissions of the /etc/postfix directory to restrict permissions to allow only its owner and the corresponding group:
+sudo chmod -R o-rwx /etc/postfix
+Dovecot
+1.	   Backup config files 
+  sudo cp /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.orig
+sudo cp /etc/dovecot/conf.d/10-mail.conf /etc/dovecot/conf.d/10-mail.conf.orig
+sudo cp /etc/dovecot/conf.d/10-auth.conf /etc/dovecot/conf.d/10-auth.conf.orig
+sudo cp /etc/dovecot/dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext.orig
+sudo cp /etc/dovecot/conf.d/10-master.conf /etc/dovecot/conf.d/10-master.conf.orig
+sudo cp /etc/dovecot/conf.d/10-ssl.conf /etc/dovecot/conf.d/10-ssl.conf.orig
+2.	  edit the /etc/dovecot/dovecot.conf file. Uncomment protocols = imap pop3 lmtp in the # Protocols we want to be serving. section of the file:
+  /etc/dovecot/dovecot.conf
+  protocols = imap pop3 lmtp
+postmaster_address = postmaster at ingress.az
+3.	Edit /etc/dovecot/conf.d/10-mail.conf
+ mail_location = maildir:/var/mail/vhosts/%d/%n
+  mail_privileged_group = mail
+4.	Create the /var/mail/vhosts/ directory and a subdirectory for your domain. Replace example.com with your domain name:
+5.	Create the /var/mail/vhosts/ directory and a subdirectory for your domain. Replace example.com with your domain name:
+sudo mkdir -p /var/mail/vhosts/ingress.az
+6.	Create the vmail group with ID 5000. Add a new user vmail to the vmail group. This system user will read mail from the server.
+ sudo groupadd -g 5000 vmail
+sudo useradd -g vmail -u 5000 vmail -d /var/mail/
+sudo chown -R vmail:vmail /var/mail/
+7.	Edit the user authentication file, located in /etc/dovecot/conf.d/10-auth.conf. Uncomment the following variables and replace with the file excerpt’s example values: 
+disable_plaintext_auth = yes
+auth_mechanisms = plain login
+!include auth-system.conf.ext
+!include auth-sql.conf.ext
+8.	Edit the /etc/dovecot/conf.d/auth-sql.conf.ext file with authentication and storage information. Ensure your file contains the following lines and that they are uncommented:
+vim /etc/dovecot/conf.d/auth-sql.conf.ext
+
+   
+passdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}
+userdb {
+  driver = static
+  args = uid=vmail gid=vmail home=/var/mail/vhosts/%d/%n
+}
+
+
+9.	Create the /etc/dovecot/dovecot-sql.conf.ext file and update it with your MySQL connection information. Add the following variables and replace the values with the excerpt example. Replace dbname, user and password with your own MySQL database values:
+   driver = mysql
+connect = host=127.0.0.1 dbname=mailserver user=mailuser password=12345
+default_pass_scheme = SHA512-CRYPT
+password_query = SELECT email as user, password FROM virtual_users WHERE email='%u';
+sudo chown -R vmail:dovecot /etc/dovecot
+10.	 Edit /etc/dovecot/conf.d/10-master.conf
+Copy content from 10-master.conf  
+INSTALL Squirrelmail
+1.	yum install epel-release –y
+2.	yum install httpd -y
+3.	systemctl enable --now httpd
+4.	yum install squirrelmail -y
+5.	.
+6.	./conf.pl
+ firewall-cmd --add-port=25/tcp --permanent
+  firewall-cmd --add-port=143/tcp --permanent
+ firewall-cmd --add-port=80/tcp --permanent
+ firewall-cmd --add-port=80/tcp
+7.	vim /etc/httpd/conf/httpd.conf 
+  Alias /webmail /usr/share/squirrelmail
+<Directory /usr/share/squirrelmail>
+Options Indexes FollowSymLinks
+RewriteEngine On
+AllowOverride All
+DirectoryIndex index.php
+Order allow,deny
+Allow from all
+</Directory>
+Systemctl restart httpd
